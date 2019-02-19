@@ -8,6 +8,6 @@
 #Description：          The test script
 #Copyright (C):         2018 All rights reserved
 #********************************************************************
-disk=`df | egrep "/dev/sd[a-z]" |  tr -s " " "%" | cut -d% -f5 | sort -rn | head -1`
-echo $disk
-[ $disk -gt 80 ] &&  wall  sajhl || wall  ok
+waring=80
+disk=`df | grep "/dev/sd" |  tr -s " " "%" | cut -d% -f5 | sort -rn | head -1`
+[ $disk -gt 80 ] &&  wall disk will be full || wall  ok
