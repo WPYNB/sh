@@ -10,4 +10,4 @@
 #********************************************************************
 waring=80
 disk=`df | grep "/dev/sd" |  tr -s " " "%" | cut -d% -f5 | sort -rn | head -1`
-[ $disk -gt 80 ] &&  wall disk will be full || wall  ok
+[ $disk -gt $waring ] &&  wall disk will be full || wall  ok
