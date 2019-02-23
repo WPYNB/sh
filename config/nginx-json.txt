@@ -10,5 +10,5 @@ log_format access2 '{"@timestamp":"$time_iso8601",'
         '"domain":"$host",'
         '"xff":"$http_x_forwarded_for",'
         '"referer":"$http_referer",'
-        #'"user_agent":"$http_user_agent",'
+        '"user_agent":"$http_user_agent",'
         '"status":"$status"}';
