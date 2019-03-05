@@ -1,0 +1,429 @@
+cd /usr/local/src/
+
+tar -xf haproxy-1.8.17.tar.gz
+cd haproxy-1.8.17/
+
+依赖包
+yum install gcc gcc-c++ glibc glibc-devel pcre pcre-devel openssl  openssl-devel systemd-devel net-tools vim iotop bc  zip unzip zlib-devel lrzsz tree screen lsof tcpdump wget ntpdate
+编译安装
+make ARCH=x86_64 TARGET=linux2628 USE_PCRE=1 USE_OPENSSL=1 USE_ZLIB=1 USE_SYSTEMD=1 USE_CPU_AFFINITY=1 PREFIX=/usr/local/haproxy
+
+make install PREFIX=/usr/local/haproxy
+
+cp haproxy /usr/sbin/
+
+vim /usr/lib/systemd/system/haproxy.service
+[Unit]
+Description=HAProxy Load Balancer
+After=syslog.target network.target
+
+[Service]
+ExecStartPre=/usr/sbin/haproxy -f /etc/haproxy/haproxy.cfg -c -q
+ExecStart=/usr/sbin/haproxy -Ws -f /etc/haproxy/haproxy.cfg -p /run/haproxy.pid
+ExecReload=/bin/kill -USR2 $MAINPID
+
+[Install]
+WantedBy=multi-user.target
+
+###########
+配置文件
+mkdir /etc/haproxy
+vim /etc/haproxy/haproxy.cfg
+global
+maxconn 100000
+chroot /usr/local/haproxy
+#stats socket /var/lib/haproxy/haproxy.sock mode 600 level admin #取消注释后重启，起不来，执行mkdir /var/lib/haproxy,再重启
+uid 99
+gid 99
+daemon
+nbproc 4
+cpu-map 1 0
+cpu-map 2 1
+pidfile /usr/local/haproxy/run/haproxy.pid
+log 127.0.0.1 local3 info #日志 需在/etc/rsyslog.conf中定义 info为日志级别
+取消注释
+# Provides UDP syslog reception
+$ModLoad imudp
+$UDPServerRun 514
+
+# Provides TCP syslog reception
+$ModLoad imtcp
+$InputTCPServerRun 514
+添加一行
+local6.*                                                /var/log/haproxy.log
+
+defaults
+option http-keep-alive
+option  forwardfor
+maxconn 100000
+mode http
+timeout connect 300000ms
+timeout client  300000ms
+timeout server  300000ms
+
+listen stats
+ mode http
+ bind 0.0.0.0:9999
+ stats enable
+ log global
+ stats uri     /haproxy-status
+ stats auth    haadmin:q1w2e3r4ys
+
+listen  web_port
+ bind 0.0.0.0:80
+ mode http
+ log global
+ server web1  127.0.0.1:8080  check inter 3000 fall 2 rise 5
+
+配置一：
+######
+#官网入口   默认轮询调度
+frontend  web-port-80
+    bind 172.18.50.102:80
+    use_backend web_host
+
+backend web_host
+    redirect prefix http://www.magedu.com #相当于302临时重定向
+    server 172.18.50.103 172.18.50.103:8080 weight 2 check addr 172.18.50.103 port 8080 inter 2000 fall 3 rise 5
+    server 172.18.50.104 172.18.50.104:8080 weight 1 check addr 172.18.50.104 port 8080 inter 2000 fall 3 rise 5
+	
+配置二：
+#####
+#官网入口 
+listen web-port-80-listen
+    bind 172.18.50.102:80
+    server 172.18.50.103 172.18.50.103:8080 weight 2 check addr 172.18.50.103 port 8080 inter 2000 fall 3 rise 5
+    server 172.18.50.104 172.18.50.104:8080 weight 1 check addr 172.18.50.104 port 8080 inter 2000 fall 3 rise 5
+#######
+调度算法	
+balance source #基于源地址哈希调度算算法
+balance source #会话保持，适用访问量较少，不集中的场景，小型业务
+hash-type consistent #基于源地址一致性哈希调度算法
+uri #基于uri调度算法
+balance roundrobin #无状态，session共享或会话保持
+balance leastcoon #数据库，长链接
+balance url_param name #uri后传递参数
+hdr ()#基于请求头部信息做哈希
+balance rdp-cookie #对远程桌面的负载，使用cookie保持会话，很少用
+
+listen web-port-80-listen
+    bind 172.18.50.100:80
+    #balance uri
+	#balance hdr(Host)
+	#balance rdp-cookie
+    balance url_param name
+    hash-type consistent
+	rspadd X-Via:\ HAProxy #添加头部信息 \ 为转义
+    rspdel Server:* #删除头部Server信息
+	reqdel User-Agent:* #删除响应报文的User-Agent
+    #redirect prefix http://www.magedu.com
+    server 172.18.50.103 172.18.50.103:8080 weight 2 check addr 172.18.50.103 port 8080 inter 2000 fall 3 rise 5
+    server 172.18.50.104 172.18.50.104:8080 weight 1 check addr 172.18.50.104 port 8080 inter 2000 fall 3 rise 5
+
+
+所需包
+yum install socat
+动态更改权重（前提需加hash-type consistent）
+echo "set weight  web-port-80-listen/172.18.50.103 2" | socat stdio /var/lib/haproxy/haproxy.sock
+获取权重值
+echo "get weight  web-port-80-listen/172.18.50.103" | socat stdio /var/lib/haproxy/haproxy.sock
+
+##########
+基于cookie实现的session 保持
+listen  web_prot_http_nodes
+    bind  192.168.7.100:80
+    mode  http
+    cookie  SERVER-COOKIE  insert indirect nocache
+    server 192.168.7.103 192.168.7.103:8080  cookie web1 check inter 3000 fall 3 rise 5
+    server 192.168.7.104 192.168.7.104:8080  cookie web2 check inter 3000 fall 3 rise 5	
+	
+######
+七层负载：
+listen  web_prot_http_nodes
+    bind  192.168.7.102:80
+    mode  http
+    #option  forwardfor
+    server 192.168.7.102  blogs.studylinux.net:80   check inter 3000 fall 3 rise 5
+
+######
+listen  web_prot_http_nodes
+    bind  192.168.7.102:80
+    mode  tcp
+    server 192.168.7.102  blogs.studylinux.net:80  send-proxy  check inter 3000 fall 3 rise 5
+
+Nginx配置：
+listen       80 proxy_protocol;
+nginx需自定义jsion日志格式
+
+log_format  json  '{"@timestamp":"$time_iso8601",'
+                      '"@version":"1",'
+					  '"host":"$server_addr",'
+                      '"client":"$remote_addr",'
+					  '"size":"$body_bytes_sent",'
+					  '"responsentime":"$request_time",'
+					  '"upstreamaddr":"$upstream_addr",'
+                      '"upstreamresponsetime":"$upstream_response_time"'
+                      '"url":"$uri",'
+                      '"status":"$status",'
+                      '"domain":"$host",'
+                      '"uri":"$uri",'
+                      '"domain":"$host",'
+					  '"xff":"$http_x_forwarded_for",'
+                      '"referer":"$http_referer",'
+					  '"tcp_xxf":"$proxy_protocol_addr",'
+                      '"useragent":"$http_user_agent",'
+                      '"upstreampstatus":"$upstream_status",'
+					  '"status":"$status"}';
+
+    access_log  logs/access_json.log  json;
+
+########
+haproxy状态页
+listen stats
+ mode http #必须是http协议
+ bind 172.18.50.102:9999
+ stats hide-version #隐藏版本号
+ stats enable
+ log global
+ stats realm HAproxy\ Stats\ Page #状态页标题
+ stats uri     /haproxy-status
+ stats auth    admin:123456 #用户认证，可定义多个
+ stats auth    haadmin:123456
+ stats admin if TRUE #开启状态页简单管理服务
+
+###### 
+haproxy压缩
+compression algo   #启用http协议中的压缩机制，常用算法有gzip deflate
+ compression type  #要压缩的类型
+示例：
+ compression algo gzip
+ compression type compression type text/plain text/html text/css text/xml text/javascript application/javascript
+ 
+#####
+健康状态监测
+    option httpchk GET /index2.html HTTP/1.0  #基于指定URL
+    #option httpchk HEAD /index2.html HTTP/1.0\r\nHost:\ 192.168.7.102 #通过request获取的头部信息进行匹配进行健康检测
+
+######
+获取浏览器头部信息
+1.8.17版本不生效
+老版本1.5.18生效
+capture request heander Host len 128
+capture request heander User-Agent len256
+
+#########
+定义ACL
+forntend web-port-80
+    bind 172.18.50.100:80
+###########定义ACL#############
+    acl web_test_acl hdr_dom(host)  www.magedu.com #基于域名访问
+	acl ip_range_test src 172.18.50.7/24 #基于源地址访问,可跟多个地址，空格隔开
+	acl redirect_test hdr(User-Agent) -m sub  -i "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko" #基于浏览器类型 
+	acl image_server path_end -i .jpg .png .jpeg .gif #acl实现动静分离
+	acl php_server path_end -i .php
+#############调用后端服务器#############
+    use_backend web_host_80 if web_test_acl
+	use_backend web2_host if ip_range_test
+	block if ip_range_test
+	block if block_test
+	redirect prefix http://www.magedu.com if redirect_test
+	use_backend image_server_host if image_server HTTP_1.1 TRUE #后跟多个条件，后者为满足协议
+	use_backend php_server_host if php_server
+#############default server###########
+     default_backend default_host
+	 
+###########定义backend###########
+backend default_host
+    server 172.18.50.103 172.18.50.103:8080 weight 2 check addr 172.18.50.103 port 8080 inter 2000 fall 3 rise 5
+	
+backend web_host_80
+    server 172.18.50.104 172.18.50.104:8080 weight 2 check addr 172.18.50.104 port 8080 inter 2000 fall 3 rise 5
+	
+backend web2_host
+    server 172.18.50.104 172.18.50.104:8080 weight 2 check addr 172.18.50.104 port 8080 inter 2000 fall 3 rise 5
+	
+backend image_server_host
+    server 172.18.50.104 172.18.50.104:8080 weight 2 check addr 172.18.50.104 port 8080 inter 2000 fall 3 rise 5
+	
+backend php_server_host
+    server 172.18.50.102 172.18.50.102:8080 weight 2 check addr 172.18.50.102 port 8080 inter 2000 fall 3 rise 5
+
+#########
+redis四层负载
+listen redis-port
+    bind 172.18.50.102:6379
+    mode tcp  #必需遵守相应协议
+    balance leastconn
+    server redis1 172.18.50.104:6379
+redis四层访问控制
+listen redis-port
+    bind 172.18.50.102:6379
+    mode tcp
+    balance leastconn
+    acl invalid_src src 192.168.1.0/24 192.168.7.101
+    tcp-request connection reject if invalid_src
+    server redis1 172.18.50.104:6379
+    server redis2 172.18.50.103:6379 check backup
+
+###########
+keepalived
+192.168.7.100配置
+vim /etc/keepalived/keepalived.conf
+! Configuration File for keepalived
+
+global_defs {
+   notification_email {
+     812756780@qq.com
+   }
+   notification_email_from root@centos100.example.com
+   smtp_server 127.0.0.1
+   smtp_connect_timeout 30
+   router_id centos100.example.com
+   #vrrp_skip_group4 224.0.254.254  #禁用默认组播
+   vrrp_skip_check_adv_addr
+   #vrrp_strict  #禁用默认组播
+   vrrp_garp_interval 0
+   vrrp_gna_interval 0
+   vrrp_iptables
+}
+
+vrrp_instance VI_1 {
+    state MASTER
+	#state BACKUP #关闭VIP抢占
+    interface ens33
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+	#nopreempt  #关闭VIP抢占
+	#preempt_delay 300
+    unicast_src_ip 192.168.7.100 #自定义组播
+    unicast_peer {
+        192.168.7.101
+    }
+    authentication {
+        auth_type PASS
+        auth_pass 123456789
+    }
+    virtual_ipaddress {
+        192.168.7.246/21 dev ens33 label ens33:2
+        192.168.7.247/21 dev ens33 label ens33:4
+        192.168.7.248/21 dev ens33 label ens33:6
+    }
+    notify_master "/etc/keepalived/mail.sh master"
+    notify_backup "/etc/keepalived/mail.sh backup"
+    notify_fault "/etc/keepalived/mail.sh fault"
+
+}
+
+vrrp_instance VI_2 {
+    state BACKUP
+    interface ens33
+    virtual_router_id 52
+    priority 90
+    advert_int 1
+    unicast_src_ip 192.168.7.100
+    unicast_peer {
+        192.168.7.101
+    }
+    authentication {
+        auth_type PASS
+        auth_pass 123456789
+    }
+    virtual_ipaddress {
+        192.168.7.249/21 dev ens33 label ens33:1
+        192.168.7.250/21 dev ens33 label ens33:3
+        192.168.7.251/21 dev ens33 label ens33:5
+    }
+    notify_master "/etc/keepalived/mail.sh master"
+    notify_backup "/etc/keepalived/mail.sh backup"
+    notify_fault "/etc/keepalived/mail.sh fault"
+
+}
+
+192.168.7.101配置
+vim /etc/keepalived/keepalived.conf
+! Configuration File for keepalived
+
+global_defs {
+   notification_email {
+     812756780@qq.com
+   }
+   notification_email_from root@centos100.example.com
+   smtp_server 127.0.0.1
+   smtp_connect_timeout 30
+   router_id centos100.example.com
+   #vrrp_skip_group4 224.0.254.254
+   vrrp_skip_check_adv_addr
+   #vrrp_strict
+   vrrp_garp_interval 0
+   vrrp_gna_interval 0
+   vrrp_iptables
+}
+
+vrrp_instance VI_1 {
+    state BACKUP
+	#state BACKUP #关闭抢占
+    interface ens33
+    virtual_router_id 51
+    priority 90
+    advert_int 1
+	#nopreempt  #关闭VIP抢占
+	#preempt_delay 300
+    unicast_src_ip 192.168.7.101
+    unicast_peer {
+        192.168.7.100
+    }
+    authentication {
+        auth_type PASS
+        auth_pass 123456789
+    }
+    virtual_ipaddress {
+        192.168.7.246/21 dev ens33 label ens33:2
+        192.168.7.247/21 dev ens33 label ens33:4
+        192.168.7.248/21 dev ens33 label ens33:6
+    }
+    notify_master "/etc/keepalived/mail.sh master"
+    notify_backup "/etc/keepalived/mail.sh backup"
+    notify_fault "/etc/keepalived/mail.sh fault"
+}
+
+vrrp_instance VI_2 {
+    state MASTER
+    interface ens33
+    virtual_router_id 52
+    priority 100
+    advert_int 1
+    unicast_src_ip 192.168.7.101
+    unicast_peer {
+        192.168.7.100
+    }
+    authentication {
+        auth_type PASS
+        auth_pass 123456789
+    }
+    virtual_ipaddress {
+        192.168.7.249/21 dev ens33 label ens33:1
+        192.168.7.250/21 dev ens33 label ens33:3
+        192.168.7.251/21 dev ens33 label ens33:5
+    }
+    notify_master "/etc/keepalived/mail.sh master"
+    notify_backup "/etc/keepalived/mail.sh backup"
+    notify_fault "/etc/keepalived/mail.sh fault"
+}
+
+nopreempt  #关闭VIP抢占，需要VIP state都为BACKUP
+其中一台机器挂掉地址飘到备用机，即使主节点机器恢复，地址也不会再飘回原机器
+
+preempt_delay #Master重新启动后，抢占延迟，默认300秒
+
+启用子配置文件
+makdir /etc/keepalived/conf
+vim /etc/keepalived/keepalived.conf
+include /etc/keepalived/conf/*.conf
+配置写下conf目录下一样生效
+
+haproxy更改启动脚本使其读取自定义配置文件 (新版本支持指定目录，老版本只支持指定文件)
+添加
+ -f /etc/haproxy/conf
+到ExecStart=/usr/sbin/haproxy-systemd-wrapper -f /etc/haproxy/haproxy.cfg -p /run/haproxy.pid $OPTIONS中
+

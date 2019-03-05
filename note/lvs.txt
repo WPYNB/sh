@@ -1,0 +1,64 @@
+﻿
+静态算法：仅根据算法本身和请求报文特征进行调度
+rr: round-robin  轮替 轮询
+wrr: weighted rr
+sh: cource ip hashing
+dh: destination ip hashing 
+动态算法：额外考虑后端RS的当前的负载状态
+ls: least connections    overhead=(activeconns*256inactiveconns)/weight
+weighted: wlc
+sed: 最短期望延迟        overhead=(activeconns+1)*256/weight 
+nq
+lblc
+lblcr
+NAT: 多目标DNAT，通常修改请求报文的目标ip和port为经由调度算法挑选出的某后端RS的RIP和/或PORT
+DR：通过在源ip报文外封装帧首部（源MAC,目标MAC）完成调度，目标MAC是由调度算法挑选出的某后端RS的MAC地址
+YUN：通过在源ip报文（CIP:VIP）外再封装一个新的IP首部（DIP:RIP）完成调度
+FULLNAT: 通过修改请求报文的源IP（CIP->DIP）和目标IP（VIP->RIP）完成调度
+
+firemark
+	为服务提供分类器，从而实现将多个服务归类一个服务
+
+vim /usr/lib/systemd/system/docker.service
+ExecStartPost=/usr/sbin/iptables -P FORWARD ACCEPT
+
+
+工作的协议层次
+	4 layer:转发 交换
+	7 layer:代理
+代理：
+	Proxy
+	正向:
+	反向:
+	
+静态: images,css,js
+动态: php,jsp
+
+数据
+	结构化数据: MySQL...
+	半结构化数据: JSON,XML,KV...
+	非结构化数据: 分布式存储（SDS软件定义的存储）
+						：分布式文件系统
+						：分布式对象存储
+						：分布式块存储
+
+drain：排干	
+
+C10k
+	进程模型：一个子进程处理一个请求；Prefork,LWP
+		select(),poll()最大并发1024,
+	线程模型：一个子进程生成多个线进程，每个现成处理一个请求；Worker
+	事件驱动模型：
+	
+Web Server
+	虚拟主机
+Proxy Server
+	http
+	smtp
+	pop3/imap4
+Stream Server
+
+
+
+
+

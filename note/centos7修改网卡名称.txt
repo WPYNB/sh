@@ -1,0 +1,12 @@
+修改centos7网卡名称
+vim /etc/default/grub
+GRUB_CMDLINE_LINUX="crashkernel=auto rhgb quiet"	quiet后面加上net.ifnames=0 biosdevname=0
+#更新GRUB、内核配置
+grub2-mkconfig -o /boot/grub2/grub.cfg &> /dev/null
+
+cd /etc/sysconfig/network-scripts/
+mv ifcfg-ens33 ifcfg-eth0
+编辑网卡的配置文件将里面的NAME、DEVICE项修改为eth0
+vim ifcfg-eth0
+NAME="eth0"
+DEVICE="eth0"

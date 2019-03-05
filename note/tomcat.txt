@@ -1,0 +1,358 @@
+toomcat
+	
+如何区分前端语言还是后端语言	
+前端开发：客户端运行
+后端开发：服务端运行
+				：php,jsp,c#.net
+
+软件架构模式
+	分层架构：表现层，业务层，持久层，数据库层
+	事件驱动架构：分布式架构，调度解耦
+	微内核架构：即插式架构
+	微服务架构：API REST-based,application REST-based,中心化消息
+	基于云空间架构：云架构
+	
+docker image pull tomcat:8.5-alpine
+
+下载：搜索oracle jdk
+
+安装一：OpenJDK 11 + Tomcat 7.0
+查看：yum list all java*
+安装opeenjdk:yum install java-11-openjdk-devel
+
+安装tomcat
+yum 安装
+yum list all tomcat* 查看
+
+yum install tomcat-admin-webapps tomcat-webapps tomcat-docs-webapp -y 
+systemctl start tomcat 
+8005 管理接口
+8009 ajp
+8080 http
+
+安装二：Oracle JDK 8u191 Tomcat 8.5
+
+lftp 172.18.0.1
+cd /pub/Sources/7.x86_64/jdk
+lftp 172.18.0.1:/pub/Sources/7.x86_64/jdk> ls
+-rw-r--r--    1 0        0        138082565 Nov 10  2017 jdk-7u79-linux-x64.rpm
+-rw-r--r--    1 0        0        169971490 Nov 10  2017 jdk-8u144-linux-x64.rpm
+-rw-r--r--    1 0        0        176154027 Nov 20 03:06 jdk-8u191-linux-x64.rpm
+-rw-r--r--    1 0        0        142191827 Nov 10  2017 jdk-8u25-linux-x64.rpm
+lftp 172.18.0.1:/pub/Sources/7.x86_64/jdk> 
+lftp 172.18.0.1:/pub/Sources/7.x86_64/jdk> mget jdk-8u191-linux-x64.rpm 
+176154027 bytes transferred in 15 seconds (11.02M/s)
+
+rpm -ivh jdk-8u191-linux-x64.rpm
+
+vim /etc/profile.d/java.sh
+JAVA_HOME=/user/java/default
+PATH=$JAVA_HOME/bin:$PATH
+exprot JAVA_HOME PATH
+. /etc/profile.d/java.sh
+
+安装tomcat
+官方包安装
+wget http://mirrors.hust.edu.cn/apache/tomcat/tomcat-8/v8.5.37/bin/apache-tomcat-8.5.37.tar.gz
+
+tar -xf apache-tomcat-8.5.37.tar.gz -C /usr/local
+cd /usr/local
+ln -sv apache-tomcat-8.5.37 tomcat
+cd tomcat 
+
+不能以root用户运行
+useradd tomcat
+chown -R tomcat.tomcat ./*
+bin/catalina.sh --help 启动脚本
+su - tomcat -c "/usr/local/tomcat/bin/catalina.sh start" 运行
+
+配置
+cd /etc/tomcat
+在Engine上下文中添加Host及Context
+Context 相当于nginx中的alias 路径别名，使用Context时文件目录才可以使用符号链接
+vim server.xml
+<Host name="www.centos107.com" appBase="/data/webapps"
+	    unapckWARs="ture" autoDeploy="ture">
+	<Context path="/myapp" docBase="/myapps/testapp" reloadable=""/>
+
+
+Valve组件
+combined日志格式
+例：httpd
+LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-agent}i\"" combined
+CustomLog log/access_log combined
+
+tomcat日志
+<Host name="www.centos107.com" appBase="/data/webapps"
+        unapckWARs="ture" autoDeploy="ture">
+	<Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"
+           prefix="centos107." suffix=".log"
+           pattern="%h %l %u %t &quot;%r&quot; %s %b" />
+    <Context path="/myapp" docBase="/myapps/testapp" reloadable=""/>
+</Host>
+
+tomcat设置为json格式日志
+ <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"
+               prefix="localhost_access_log" suffix=".log"
+               pattern="{&quot;client&quot;:&quot;%h&quot;,  &quot;client user&quot;:&quot;%l&quot;,   &quot;authenticated&quot;:&quot;%u&quot;,   &quot;access time&quot;:&quot;%t&quot;,     &quot;method&quot;:&quot;%r&quot;,   &quot;status&quot;:&quot;%s&quot;,  &quot;send bytes&quot;:&quot;%b&quot;,  &quot;Query?string&quot;:&quot;%q&quot;,  &quot;partner&quot;:&quot;%{Referer}i&quot;,  &quot;Agent version&quot;:&quot;%{User-Agent}i&quot;}"/>
+
+默认web界面manager App与Host manager设置用户密码登录
+编辑此文件添加如下两行
+用户为：tomcat 密码：tomcat
+vim /etc/tomcat/tomcat-users.xml
+<role rolename="manager-gui"/>
+<role rolename="admin-gui"/>
+<user username="tomcat" password="tomcat" roles="manager-gui,manager-script,admin-gui,admin-script"/>
+
+nginx与tomcat在同一主机
+nginx反代tomcat
+proxy_pass后最好写主机名，搭好内网dns解析服务器#写ip不会被任何虚拟主机代理，因而tomcat只能交给默认虚拟主机处理。
+方法一：完全反代
+location / {
+	proxy_pass http:/127.0.0.1:8080;
+}
+方法二：动静分离反代
+location ~* \.(jsp|do)$ {
+	proxy_pass http://127.0.0.1:8080;  
+}
+location / {
+	root /data/myapp/ROOT/;
+}
+例：nginx反代tomcat
+使用docker启动tomcat容器
+docker image pull tomcat:8.5-alpine
+
+docker run --name tc1 -d -v /usr/local/tomcat/webapps tomcat:8.5-alpine
+
+yum install nginx -y 
+
+vim /etc/nginx/nginx.conf
+location / {
+            proxy_pass http://172.17.0.2:8080;
+        }
+
+httpd反代tomcat
+yum install httpd
+基于http协议代理
+vim /etc/httpd/conf.d/tomcat-http.conf
+<VirtualHost *:80>
+        ServerName      www.centos107.com
+        ProxyRequests Off  #关闭正向代理
+        ProxyVia        On
+        ProxyPreserveHost On  #把本机主机名访问的名称代理访问到tomcat内所匹配的主机名的主机处理
+        <Proxy *>
+                Require all granted
+        </Proxy>
+        ProxyPass / http://172.17.0.2:8080/
+        ProxyPassReverse / http://172.17.0.2:8080/
+        <Location />
+                Require all granted  #授权所有人访问
+        </Location>
+</VirtualHost>
+
+基于ajp协议代理
+vim /etc/httpd/conf.d/tomcat-ajp.conf
+Listen 81
+						<VirtualHost *:81>
+                                ServerName      www.centos107.com
+                                ProxyRequests Off
+                                ProxyVia        On
+                                ProxyPreserveHost On
+                                <Proxy *>
+                                        Require all granted
+                                </Proxy>
+                                ProxyPass / ajp://172.0.0.2:8009/
+                                ProxyPassReverse / aip://172.0.0.2:8009/
+                                <Location />
+                                        Require all granted
+                                </Location>
+                        </VirtualHost>
+
+tomcat 负载均衡
+两台 tomcat 机器，一台负载机
+yum install -y java-11-openjdk-devel tomcat-admin-webapps tomcat-webapp tomcat-webapps
+
+mkdir /webapps/myapp-v1.0/{WEB-INF,META-INF,classes,lib} -pv
+vim /webapps/myapp-v1.0/index.jsp
+<%@ page language="java" %>
+<html>
+<head><title>TomcatA</title></head>
+<body>
+	<h1><font color="red">TomcatA.magedu.com</font></h1>
+	<table align="centre" border="1">
+		<tr>
+			<td>Session ID</td>
+		<% session.setAttribute("magedu.com","magedu.com"); %>
+			<td><%= session.getId() %></td>
+		</tr>
+		<tr>
+			<td>Created on</td>
+			<td><%= session.getCreationTime() %></td>
+		</tr>
+	</table>
+</body>
+</html>
+
+scp -r /webapps 172.18.50.108:/
+cd /webapps/
+ln -sv myapp-v1.0 myapp
+cd /etc/tomcat
+
+vim server.xml
+<Context path="/myapp" docBase="/webapps/myapp" reloadable=""/>
+
+vim tomcat-users.xml
+<role rolename="admin-gui"/> -->
+<role rolename="admin-script"/> -->
+<role rolename="manager-gui"/> -->
+<role rolename="manager-script"/> -->
+<user username="tomcat" password="123456" roles="manager-gui,manager-script,admin-gui,admin-script"/>
+
+负载机
+yum install nginx httpd -y 
+
+nginx负载
+vim /etc/nginx/nginx.conf
+upstream tcsrvs {
+        hash $remote_addr consistent;#一致性hash保持回话一致性
+        server 172.18.50.107:8080;
+        server 172.18.50.108:8080;
+    }
+location / {
+            proxy_pass http://tcsrvs/;
+        }
+
+httpd负载，共两种协议，分别为：http与ajp
+cd /etc/httpd/conf.d/
+
+http协议
+vim tomcat-http.conf
+Header add Set-Cookie "ROUTEID=.%{BALANCER_WORKER_ROUTE}e; path=/" env=BALANCER_ROUTE_CHANGED #会话保持
+<proxy balancer://tcsrvs>
+        BalancerMember http://172.18.50.107:8080 loadfactor=2#权重 route=tcA #会话绑定标注
+        BalancerMember http://172.18.50.108:8080 route=tcB
+        ProxySet lbmethod=byrequests
+		ProxySet stickysession=ROUTEID #回话保持，调用上面定义Header
+</Proxy>
+
+<VirtualHost *:80>
+        ServerName myapp.centos107.com
+        ProxyVia On
+        ProxyRequests Off
+        ProxyPreserveHost On
+        <Proxy *>
+                Require all granted
+        </Proxy>
+        ProxyPass / balancer://tcsrvs/
+        ProxyPassReverse / balancer://tcsrvs/
+        <Location />
+                Require all granted
+        </Location>
+</VirtualHost>
+
+ajp协议
+vim tomcat-ajp.conf
+Listen 90
+<proxy balancer://tcsrvs>
+	BalancerMember ajp://172.18.50.107:8009 loadfactor=2 #权重
+	BalancerMember ajp://172.18.50.108:8009
+	ProxySet lbmethod=byrequests
+</Proxy>
+
+<VirtualHost *:90>
+	ServerName myapp.centos107.com
+	ProxyVia On
+	ProxyRequests Off
+	ProxyPreserveHost On
+	<Proxy *>
+		Require all granted
+	</Proxy>
+	ProxyPass / balancer://tcsrvs/
+	ProxyPassReverse / balancer://tcsrvs/
+	<Location />
+		Require all granted
+	</Location>
+</VirtualHost>
+
+tomcat会话黏性，保持会话
+配置tomcat所有节点
+        <Cluster className="org.apache.catalina.ha.tcp.SimpleTcpCluster"
+                 channelSendOptions="8">
+
+          <Manager className="org.apache.catalina.ha.session.DeltaManager"
+                   expireSessionsOnShutdown="false"
+                   notifyListenersOnReplication="true"/>
+
+          <Channel className="org.apache.catalina.tribes.group.GroupChannel">
+            <Membership className="org.apache.catalina.tribes.membership.McastService"
+                        address="228.0.50.1" #此处为组播地址
+                        port="45564"
+                        frequency="500"
+                        dropTime="3000"/>
+            <Receiver className="org.apache.catalina.tribes.transport.nio.NioReceiver"
+                      address="172.18.50.107" #此处绑定本机能监听的地址
+                      port="4000"
+                      autoBind="100"
+                      selectorTimeout="5000"
+                      maxThreads="6"/>
+
+            <Sender className="org.apache.catalina.tribes.transport.ReplicationTransmitter">
+              <Transport className="org.apache.catalina.tribes.transport.nio.PooledParallelSender"/>
+            </Sender>
+            <Interceptor className="org.apache.catalina.tribes.group.interceptors.TcpFailureDetector"/>
+            <Interceptor className="org.apache.catalina.tribes.group.interceptors.MessageDispatch15Interceptor"/>
+          </Channel>
+
+          <Valve className="org.apache.catalina.ha.tcp.ReplicationValve"
+                 filter=""/>
+          <Valve className="org.apache.catalina.ha.session.JvmRouteBinderValve"/>
+
+          <Deployer className="org.apache.catalina.ha.deploy.FarmWarDeployer"
+                    tempDir="/tmp/war-temp/"
+                    deployDir="/tmp/war-deploy/"
+                    watchDir="/tmp/war-listen/"
+                    watchEnabled="false"/>
+
+          <ClusterListener className="org.apache.catalina.ha.session.JvmRouteSessionIDBinderListener"/> #此处最后别忘加"/"
+          <ClusterListener className="org.apache.catalina.ha.session.ClusterSessionListener"/> #此处最后别忘加"/"
+        </Cluster>
+
+Tomcat session server实现
+yum install memcached
+vim /etc/sysconfig/memcached
+PROT="11211"
+USER="memcached"
+MAXCONN="1024"
+CACHESIZE="256" #内存大小
+OPTIONS="-f 1.1 -M" M意思为内存满后拒绝存入内容，而不用LRU算法淘汰
+
+yum list all php*memcache*  用哪个取决于程序员写程序调用哪个。
+php-pecl-memcache.x86_64                                      3.0.8-4.el7             base php#程序调用#建议使用
+php-pecl-memcached.x86_64                                     2.2.0-1.el7             epel
+python-memcached.noarch                                       1.48-4.el7              base #python调用
+libmemcached.x86_64                                           1.0.16-5.el7            base  #C|C++调用上面定义Header
+
+准备jar文件
+rpm -ql tomcat-lib
+/usr/share/java/tomcat  #tomcat的jar文件所放位置
+jar文件下载地址，选择适合版本
+http://repo1.maven.org/maven2/de/javakaffee/msm/memcached-session-manager/  #memcached所使用jar文件
+https://github.com/magro/memcached-session-manager/wiki/SetupAndConfiguration #redis所适用jar文件
+
+班级ftp下载
+cd /pub/Source/7.x86_64/msm/
+mget *.jar
+cd kryo
+mget *.jar
+scp 把jar文件拷贝个节点
+
+删除之前cluster实验配置
+加入tomcat配置文件Context中
+<Context>
+  <Manager className="de.javakaffee.web.msm.MemcachedBackupSessionManager"
+    memcachedNodes="n1:172.18.50.107:11211,n2:host2.172.18.50.108:11211"
+    failoverNodes="n1"
+    requestUriIgnorePattern=".*\.(ico|png|gif|jpg|css|js)$"
+    transcoderFactoryClass="de.javakaffee.web.msm.serializer.kryo.KryoTranscoderFactory"
+    />
+</Context>

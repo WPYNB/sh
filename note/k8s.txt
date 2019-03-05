@@ -1,0 +1,402 @@
+kubernetes
+
+部署k8s
+node1为master节点  其他为被管理节点
+1、测试环境说明
+    （1）借助于NTP服务设定各节点时间精确同步；
+    （2）通过DNS完成各节点的主机名称解析，测试环境主机数量较少时也可以使用hosts文件进行；
+    （3）关闭各节点的iptables或firewalld服务，并确保它们被禁止随系统引导过程启动；
+    （4）各节点禁用SELinux； 
+    （5）各节点禁用所有的Swap设备；swapoff -a
+    （6）若要使用ipvs模型的proxy，各节点还需要载入ipvs相关的各模块；
+[root@master ~]# cd /usr/lib/modules/3.10.0-957.el7.x86_64/kernel/net/netfilter/ipvs/
+[root@master ipvs]# ls
+ip_vs_dh.ko.xz    ip_vs_lblcr.ko.xz   ip_vs_rr.ko.xz   ip_vs_wrr.ko.xz
+ip_vs_ftp.ko.xz   ip_vs_lc.ko.xz      ip_vs_sed.ko.xz
+ip_vs.ko.xz       ip_vs_nq.ko.xz      ip_vs_sh.ko.xz
+ip_vs_lblc.ko.xz  ip_vs_pe_sip.ko.xz  ip_vs_wlc.ko.xz
+
+创建内核模块载入相关的脚本文件/etc/sysconfig/modules/ipvs.modules，设定自动载入的内核模块
+#!/bin/bash
+ipvs_mods_dir="/usr/lib/modules/$(uname -r)/kernel/net/netfilter/ipvs"
+for mod in $(ls $ipvs_mods_dir | grep -o "^[^.]*"); do
+    /sbin/modinfo -F filename $mod  &> /dev/null
+    if [ $? -eq 0 ]; then
+        /sbin/modprobe $mod
+    fi
+done
+ 
+修改文件权限，并手动为当前系统加载内核模块：
+    ~]# chmod +x /etc/sysconfig/modules/ipvs.modules 
+    ~]# bash /etc/sysconfig/modules/ipvs.modules 
+	
+
+2、安装docker-ce （各节点都需安装docker）
+配置docker仓库
+cd /etc/yum.repos.d/
+wget https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+
+若要通过默认的k8s.gcr.io镜像仓库获取Kubernetes系统组件的相关镜像，需要配置docker Unit 
+vim /usr/lib/systemd/system/docker.service
+Environment="HTTPS_PROXY=http://www.ik8s.io:10070"
+Environment="NO_PROXY=127.0.0.0/8,172.20.102.0/24"
+ExecStartPost=/usr/sbin/iptables -P FORWARD ACCEPT
+
+systemctl daemon-reload && systemctl start docker
+systemctl enable docker 
+
+3、更改内核参数
+查看内核参数 sysctl -a | grep bridge
+net.bridge.bridge-nf-call-ip6tables = 0
+net.bridge.bridge-nf-call-iptables = 0
+手动添加 并使开机自动生效
+vim /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+
+sysctl -p /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+
+4、拷贝文件至各节点
+scp /etc/sysctl.d/k8s.conf node01:/etc/sysctl.d/
+scp /etc/sysctl.d/k8s.conf node02:/etc/sysctl.d/
+scp /etc/sysctl.d/k8s.conf node03:/etc/sysctl.d/
+
+scp /usr/lib/systemd/system/docker.service node01:/usr/lib/systemd/system/docker.service
+scp /usr/lib/systemd/system/docker.service node02:/usr/lib/systemd/system/docker.service
+scp /usr/lib/systemd/system/docker.service node03:/usr/lib/systemd/system/docker.service
+
+分别启动docker 并设置开机自启
+systemctl daemon-reload && systemctl start docker
+systemctl enable docker
+
+5、安装kubernetes相关包
+准备kubernetes的yum仓库
+vim kubernetes.repo 
+[kubernetes]
+name=Kubernetes Repository
+baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64/
+gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+        https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg
+		
+阿里镜像站获取仓库及gpgkey
+
+yum install kubeadm kubectl kubelet
+
+修改kubelet配置 (忽略启用swap，禁止报错)
+vim /etc/sysconfig/kubelet 
+KUBELET_EXTRA_ARGS="--fail-swap-on=false"
+
+6、初始化集群服务
+查看默认配置
+kubeadm config print init-defaults
+
+配置中有些内容不符合，需要修改，如下
+kubeadm init --kubernetes-version="v1.13.3" --pod-network-cidr="10.244.0.0/16" --dry-run （测试干跑一遍）
+如出现[ERROR Swap] 则添加一项"--ignore-preflight-errors=Swap"  注意Swap ‘S’大写
+
+此步骤会从网上托镜像，比较慢  可以先拖下来 在执行
+REPOSITORY          TAG                 IMAGE ID            CREATED             SIZE
+[root@node1 ipvs]# kubeadm config images pull
+[config/images] Pulled k8s.gcr.io/kube-apiserver:v1.13.3
+[config/images] Pulled k8s.gcr.io/kube-controller-manager:v1.13.3
+[config/images] Pulled k8s.gcr.io/kube-scheduler:v1.13.3
+[config/images] Pulled k8s.gcr.io/kube-proxy:v1.13.3
+[config/images] Pulled k8s.gcr.io/pause:3.1
+[config/images] Pulled k8s.gcr.io/etcd:3.2.24
+[config/images] Pulled k8s.gcr.io/coredns:1.2.6
+在执行
+kubeadm init --kubernetes-version="v1.13.3" --pod-network-cidr="10.244.0.0/16" --ignore-preflight-errors=Swap
+如果准备有镜像压缩包   可用docker load 解压  
+docker load -i k8s-master-v1.13.3.tar
+
+初始化成功后记录下面命令，后面添加节点用到
+kubeadm join 192.168.50.5:6443 --token iggc8k.wbnh22m6zm0fffz2 --discovery-token-ca-cert-hash sha256:d1d119e07e42a637374b86396cb93854e501dba26f532a4fc83d76feaaa46a45
+
+创建目录 拷贝文件  使master具有管理权限
+mkdir .kube
+cp /etc/kubernetes/admin.conf .kube/config
+
+部署前查看
+[root@node1 ~]# kubectl get nodes
+NAME    STATUS     ROLES    AGE   VERSION
+node1   NotReady   master   47m   v1.13.3
+
+部署网络插件 （部署清单） 
+命令在GitHub上coreos中有   地址：https://github.com/coreos/flannel
+kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+
+部署后查看
+[root@node1 ~]# kubectl get nodes
+NAME    STATUS   ROLES    AGE   VERSION
+node1   Ready    master   52m   v1.13.3
+
+7、各节点也安装kubernetes（kubeadm kubelet kubectl）相关包
+配置仓库
+scp /etc/yum.repos.d/kubernetes.repo node01:/etc/yum.repos.d/
+scp /etc/yum.repos.d/kubernetes.repo node02:/etc/yum.repos.d/
+scp /etc/yum.repos.d/kubernetes.repo node03:/etc/yum.repos.d/
+
+yum install kubeadm kubelet kubectl -y
+
+scp /etc/sysconfig/kubelet node01:/etc/sysconfig/
+scp /etc/sysconfig/kubelet node02:/etc/sysconfig/
+scp /etc/sysconfig/kubelet node03:/etc/sysconfig/
+
+在被管理节点node2 node3 node4 上分别执行如下命令 注意报错后，在后面添加 --ignore-preflight-errors=Swap
+kubeadm join 192.168.50.5:6443 --token iggc8k.wbnh22m6zm0fffz2 --discovery-token-ca-cert-hash sha256:d1d119e07e42a637374b86396cb93854e501dba26f532a4fc83d76feaaa46a45 --ignore-preflight-errors=Swap
+此步骤会从网上托镜像，比较慢  也可自己事先下载好使用docker load 解开压缩包，然后在执行上面命令
+docker load -i k8s-node-v1.13.3.tar
+[root@node3 ~]# docker image list
+REPOSITORY               TAG                 IMAGE ID            CREATED             SIZE
+k8s.gcr.io/kube-proxy    v1.13.3             98db19758ad4        13 days ago         80.3MB
+quay.io/coreos/flannel   v0.11.0-amd64       ff281650a721        2 weeks ago         52.6MB
+k8s.gcr.io/pause         3.1                 da86e6ba6ca1        14 months ago       742kB
+
+在master查看
+[root@node1 ~]# kubectl get nodes
+NAME    STATUS   ROLES    AGE    VERSION
+node1   Ready    master   141m   v1.13.3
+node2   Ready    <none>   24m    v1.13.3
+node3   Ready    <none>   85s    v1.13.3
+node4   Ready    <none>   16s    v1.13.3
+已全部加入master
+
+被管理节点上虽然也有kubectl命令  但不能使用kubectl get nodes 查看和管理。要想其他节点可查看管理 需把master节点上/etc/kubernetes/admin.conf 拷贝至需要查看的节点上，此节点家目录需先创建.kube目录
+mkdir .kube
+scp /etc/kubernetes/admin.conf node2:/root/.kube/config   需改名为config
+
+8、kubectl命令使用
+查看名称空间
+kubectl get ns
+创建名称空间testing 
+kubectl create namespace testing 
+删除名称空间
+kubectl delete namespace testing 或 kubectl delete ns/testing ns/develop  后者可一次写多个，空格隔开
+查询名称空间信息(格式不同)
+kubectl get ns/default
+kubectl get ns/default -o wide
+kubectl get ns/default -o yaml 
+kubectl get ns/default -o json
+
+查看名称空间描述信息  一般指状态信息
+kubectl describe ns/default
+
+创建pod
+kubectl create deploy ngx-dep --iamge=nginx:1.14-alpine
+查看所有资源 （没指名称空间表示default名称空间）
+[root@node1 ~]# kubectl get all
+NAME                           READY   STATUS    RESTARTS   AGE
+pod/ngx-dep-68699d7cc4-cnrlz   1/1     Running   0          63s
+
+NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+service/kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   3h21m
+
+NAME                      READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/ngx-dep   1/1     1            1           64s
+
+NAME                                 DESIRED   CURRENT   READY   AGE
+replicaset.apps/ngx-dep-68699d7cc4   1         1         1       64s
+
+查看pod
+[root@node1 ~]# kubectl get pods
+NAME                       READY   STATUS    RESTARTS   AGE
+ngx-dep-68699d7cc4-cnrlz   1/1     Running   0          4m39s
+
+详细显示
+[root@node1 ~]# kubectl get pods -o wide
+NAME                       READY   STATUS    RESTARTS   AGE     IP           NODE    NOMINATED NODE   READINESS GATES
+ngx-dep-68699d7cc4-cnrlz   1/1     Running   0          6m56s   10.244.1.2   node2   <none>           <none>
+
+访问测试
+[root@node1 ~]# curl 10.244.1.2
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+    body {
+        width: 35em;
+        margin: 0 auto;
+        font-family: Tahoma, Verdana, Arial, sans-serif;
+    }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+
+删除pod
+[root@node1 ~]# kubectl delete pods/ngx-dep-68699d7cc4-cnrlz
+pod "ngx-dep-68699d7cc4-cnrlz" deleted
+
+创建service
+kubectl create service clusterip ngx-dep --tcp=80:80   #创建service时名字与pod相同，service会自动关联到pod，使得pod被删除后自动新建pod自动关联到service，从而就算pod地址改变，service不会改变，通过访问service访问pod。
+查看service
+[root@master ~]# kubectl get svc
+NAME         TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+kubernetes   ClusterIP   10.96.0.1      <none>        443/TCP   125m
+ngx-dep      ClusterIP   10.97.131.83   <none>        80/TCP    12s
+
+service地址也会改变，我们通过名称访问，用kubectl get svc -n kube-system查看自带kube-dns
+[root@master ~]# kubectl get svc -n kube-system
+NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)         AGE
+kube-dns   ClusterIP   10.96.0.10   <none>        53/UDP,53/TCP   138m
+
+把本地dns解析配置文件改为此地址
+vim /etc/resolv.conf 
+# Generated by NetworkManager
+nameserver 10.96.0.10
+
+curl ngx-dep.default.svc.cluster.local. 正常访问  #后缀svc.cluster.local.为固定格式，初始化集群kubeadm init时可自定义
+
+删除service
+kubectl delete svc/ngx-dep
+
+扩容myapp，指定扩容三个
+kubectl scale --replicas=3 deployment myapp
+扩容后会自动关联到相应service上
+[root@master ~]# kubectl describe svc/myapp
+Name:              myapp
+Namespace:         default
+Labels:            app=myapp
+Annotations:       <none>
+Selector:          app=myapp
+Type:              ClusterIP
+IP:                10.107.102.213
+Port:              80-80  80/TCP
+TargetPort:        80/TCP
+Endpoints:         10.244.2.3:80,10.244.3.3:80,10.244.4.3:80
+Session Affinity:  None
+Events:            <none>
+
+缩容到2个
+kubectl scale --replicas=2 deployment myapp
+缩容后service对应ip也会减少
+[root@master ~]# kubectl describe svc/myapp                        
+Name:              myapp
+Namespace:         default
+Labels:            app=myapp
+Annotations:       <none>
+Selector:          app=myapp
+Type:              ClusterIP
+IP:                10.107.102.213
+Port:              80-80  80/TCP
+TargetPort:        80/TCP
+Endpoints:         10.244.2.3:80,10.244.4.3:80
+Session Affinity:  None
+Events:            <none>
+
+使用nodeport创建service
+kubectl create service nodeport myapp --tcp=80:80
+查看service
+[root@master ~]# kubectl get svc
+NAME         TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE
+kubernetes   ClusterIP   10.96.0.1       <none>        443/TCP        163m
+myapp        NodePort    10.104.70.112   <none>        80:32090/TCP   16s
+ngx-dep      ClusterIP   10.107.11.227   <none>        80/TCP         14m
+此时windows浏览器可以访问宿主机ip加随机生成端口进而访问到pods
+192.168.7.101:32090
+
+手写yaml格式文件创建名称空间
+[root@master basic]# vim develop-ns.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: develop
+执行如下创建
+kubectl create -f develop-ns.yaml  #create创建命令不能重复执行
+查看
+[root@master basic]# kubectl get ns
+NAME          STATUS   AGE
+default       Active   3h20m
+develop       Active   6s
+kube-public   Active   3h20m
+kube-system   Active   3h20m
+
+kubectl apply -f prod-ns.yaml  #apply可重复执行，如果已经创建，则不会发生改变    ##声明示创建
+查看
+[root@master basic]# kubectl get ns
+NAME          STATUS   AGE
+default       Active   4h19m
+develop       Active   59m
+kube-public   Active   4h19m
+kube-system   Active   4h19m
+prod          Active   13s
+
+创建容器
+[root@master basic]# vim pod-demo-2.yaml 
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-demo
+  namespace: prod
+spec:
+  containers:
+  - name: myapp
+    image: ikubernetes/myapp:v1
+  - name: bbox
+    image: busybox:latest
+    imagePullPolicy: IfNotPresent
+    command: ["/bin/sh","-c","sleep 86400"]
+运行
+kubectl apply -f pod-demo-2.yaml
+查看
+[root@master basic]# kubectl get pods -n prod         
+NAME       READY   STATUS    RESTARTS   AGE
+pod-demo   2/2     Running   0          3m36s
+
+进入交互式接口
+kubectl exec pod-demo -c bbox -n prod -it -- /bin/sh
+
+
+创建host-pod.yaml文件，建立一个新pod，使宿主机可访问
+vim host-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mypod
+  namespace: default
+spec:
+  containers:
+  - name: myapp
+    image: ikubernetes/myapp:v1
+    ports:
+    - protocol: TCP
+      containerPort: 80
+      name: http
+      hostPort: 8080  #使监听宿主机的8080端口，windows可访问宿主机8080端口
+执行创建
+kubectl apply -f host-pod.yaml
+[root@master basic]# kubectl get pods -o wide
+NAME                       READY   STATUS    RESTARTS   AGE    IP           NODE     NOMINATED NODE   READINESS GATES
+myapp-6c5bfd4dff-xhrbj     1/1     Running   0          165m   10.244.2.3   node02   <none>           <none>
+myapp-6c5bfd4dff-zxlp6     1/1     Running   0          170m   10.244.4.3   node01   <none>           <none>
+mypod                      1/1     Running   0          13s    10.244.3.5   node03   <none>           <none>
+ngx-dep-68699d7cc4-9dbwn   1/1     Running   0          3h5m   10.244.2.2   node02   <none>           <none>
+仍具有内部地址，但可通过宿主机8080端口访问
+
+删除一个pod
+kubectl delete -f host-pod.yaml
+
+三种使外界能访问pod的网络的方式
+Node Network:与外部网络连接
+Service Network: iptables或ipvs和规则 不会出现在任何接口上 用于路由和调度
+Pod Network:内部网络，pod与pod之间可互相通信，pod地址不固定，可通过service层通信
+
+NnodePort #所有节点均可访问
+HostPort  #仅一个节点地址可访问
+HostNetwork #仅一个宿主机地址可访问
+
