@@ -1,0 +1,54 @@
+最小化安装所需基本命令包
+
+yum install psmisc net-tools tree tcpdump bash-completion ntpdate lrzse wget -y
+
+yum install  vim iotop bc gcc gcc-c++ glibc glibc-devel pcre \
+pcre-devel openssl  openssl-devel zip unzip zlib-devel  net-tools \
+lrzsz tree ntpdate telnet lsof tcpdump wget libevent libevent-devel \
+bc  systemd-devel bash-completion traceroute -y
+
+
+
+vim reset.sh
+cat << EOF
++---------------------------------------------------------------------------+
+|  Initialize for the CentOS installed.                                   |
++---------------------------------------------------------------------------+
+EOF
+#######定义执行成功函数########
+function format() {
+    #sleep 1
+    #echo -e "\033[42;37m ########### Finished ########### \033[0m\n"
+    echo -e "\033[32m Install Success!!!\033[0m\n"
+}
+
+########禁用防火墙和SElinux######
+echo "Disabled SELinux"
+sleep 1
+sed -i 's/^SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+format
+
+echo "Stop iptables"
+sleep 1
+systemctl stop firewalld &> /dev/null
+format 
+
+######同步时间###########
+echo "Set time."
+/bin/cp -f /usr/share/zoneinfo/Asia/Shanghai /etc/localtime &> /dev/null
+yum -y install ntpdate &> /dev/null
+ntpdate  0.centos.pool.ntp.org &> /dev/null
+hwclock -w
+format
+
+######设置ssh登陆策略#######
+echo "Set sshd."
+sed -i "s/^#PermitEmptyPasswords/PermitEmptyPasswords/" /etc/ssh/sshd_config
+#sed -i "s/^#LoginGraceTime 2m/LoginGraceTime 6m/" /etc/ssh/sshd_config
+ 
+grep "UseDNS no" /etc/ssh/sshd_config &>/dev/null
+if [ $? -ne 0 ]
+then
+    echo "UseDNS no" >> /etc/ssh/sshd_config
+fi
+
